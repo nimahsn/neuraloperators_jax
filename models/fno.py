@@ -8,6 +8,9 @@ from typing import Callable
 
 from functools import partial
 
+DATA_INPUT = 'x'
+DATA_OUTPUT = 'u'
+
 
 class SpectraclConv1d(eqx.Module):
     """
@@ -24,7 +27,7 @@ class SpectraclConv1d(eqx.Module):
         k_modes: int
             The layer truncates the Fourier series to the first `k_modes` modes. Remaining modes are set to zero.
     """
-    weight_r: Array[Complex]
+    weight_r: Array
     in_c: int = eqx.field(static=True)
     out_c: int = eqx.field(static=True)
     k_modes: int = eqx.field(static=True)
@@ -119,3 +122,5 @@ class FNO1d(eqx.Module):
         for block in self.fourier_blocks:
             x = block(x)
         return self.projection_output(x)
+    
+    # def fit(self, data_iter, epochs, optimizer)
