@@ -51,11 +51,8 @@ class SpectraclConv1d(eqx.Module):
                 The output tensor. Will be of shape `(out_c, d1)`.
         """
         x_ft = jnp.fft.rfft(x) # shape: (in_c, d1//2 + 1)
-        # WARNING: rfft uses the conjugate symmetry property of the Fourier transform to reduce the number of computations.
-        # So, when truncating to k_modes, maybe we should truncate to k_modes//2 + 1, to keep the conjugate symmetry property?
-        # apply the convolution in Fourier space for the first k modes
         out_ft = jnp.zeros((self.out_c, x_ft.shape[1]), dtype=jnp.complex64)
-        out_ft = out_ft.at[:, :self.k_modes].set(jnp.einsum('ik,iok->ok', x_ft[:, :self.k_modes], self.weight_r))
+        out_ft = out_ft.at[:, :self.k_modes].set(jnp.einsum('ik,iok->ok', x_ft[:, :self.k_modes//2+1], self.weight_r)) # keep k_modes//2+1 because of the symmetry of the real fft.
         return jnp.fft.irfft(out_ft) # shape: (out_c, d1)        
 
 
