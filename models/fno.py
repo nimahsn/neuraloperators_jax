@@ -55,7 +55,7 @@ class SpectraclConv1d(eqx.Module):
         # So, when truncating to k_modes, maybe we should truncate to k_modes//2 + 1, to keep the conjugate symmetry property?
         # apply the convolution in Fourier space for the first k modes
         out_ft = jnp.zeros((self.out_c, x_ft.shape[1]), dtype=jnp.complex64)
-        out_ft[:, self.k_modes] = jnp.einsum('ik,iok->ok', x_ft[:, :self.k_modes], self.weight_r) 
+        out_ft = out_ft.at[:, :self.k_modes].set(jnp.einsum('ik,iok->ok', x_ft[:, :self.k_modes], self.weight_r))
         return jnp.fft.irfft(out_ft) # shape: (out_c, d1)        
 
 
@@ -96,14 +96,16 @@ class FNO1d(eqx.Module):
     projection_output: eqx.Module
     in_channels: int = eqx.field(static=True)
     width: int = eqx.field(static=True)
+    out_channels: int = eqx.field(static=True)
 
-    def __init__(self, in_channels: int, width: int, k_modes: int, depth: int, activation: Callable, key: PRNGKeyArray, p_in: eqx.Module=None, p_out: eqx.Module=None):
+    def __init__(self, in_channels: int, out_channels: int, width: int, k_modes: int, depth: int, activation: Callable, key: PRNGKeyArray, p_in: eqx.Module=None, p_out: eqx.Module=None):
         self.in_channels = in_channels
+        self.out_channels = out_channels
         self.width = width
         key, *subkeys = random.split(key, depth + 3)
         self.projection_input = p_in if p_in is not None else eqx.nn.Conv1d(in_channels, width, 1, 1, key=subkeys[0])
         self.projection_output = p_out if p_out is not None else eqx.nn.Sequential([eqx.nn.Conv1d(width, 128, 1, 1, key=subkeys[1]),
-                                                                                    eqx.nn.Conv1d(128, 1, 1, 1, key=subkeys[2])])
+                                                                                    eqx.nn.Conv1d(128, out_channels, 1, 1, key=subkeys[2])])
         self.fourier_blocks = tuple(FNOBlock1d(k_modes, width, width, activation, subkey) for subkey in subkeys[3:])
 
     def __call__(self, x: ArrayLike) -> ArrayLike:
@@ -123,4 +125,3 @@ class FNO1d(eqx.Module):
             x = block(x)
         return self.projection_output(x)
     
-    # def fit(self, data_iter, epochs, optimizer)
