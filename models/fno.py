@@ -11,7 +11,6 @@ from functools import partial
 DATA_INPUT = 'x'
 DATA_OUTPUT = 'u'
 
-
 class SpectraclConv1d(eqx.Module):
     """
     Spectral Convolutional Layer for 1d inputs. The layer first transforms the input
@@ -35,8 +34,8 @@ class SpectraclConv1d(eqx.Module):
     def __init__(self, in_c: int, out_c: int, k_modes: int, key: PRNGKeyArray, initializer: Callable = jax.nn.initializers.glorot_normal):
         self.in_c = in_c
         self.out_c = out_c
-        self.k_modes = k_modes
-        self.weight_r = initializer()(key, (in_c, out_c, k_modes), jnp.complex64)
+        self.k_modes = k_modes // 2 + 1
+        self.weight_r = initializer()(key, (in_c, out_c, self.k_modes), jnp.complex64)
 
     def __call__(self, x: ArrayLike) -> ArrayLike:
         """
@@ -50,11 +49,10 @@ class SpectraclConv1d(eqx.Module):
             ArrayLike
                 The output tensor. Will be of shape `(out_c, d1)`.
         """
-        x_ft = jnp.fft.rfft(x) # shape: (in_c, d1//2 + 1)
-        out_ft = jnp.zeros((self.out_c, x_ft.shape[1]), dtype=jnp.complex64)
-        out_ft = out_ft.at[:, :self.k_modes].set(jnp.einsum('ik,iok->ok', x_ft[:, :self.k_modes//2+1], self.weight_r)) # keep k_modes//2+1 because of the symmetry of the real fft.
-        return jnp.fft.irfft(out_ft) # shape: (out_c, d1)        
-
+        x_ft = jnp.fft.rfft(x)
+        x_ft = x_ft[..., :self.k_modes]
+        out_ft = jnp.einsum('ik,iok->ok', x_ft, self.weight_r)
+        return jnp.fft.irfft(out_ft, n=x.shape[1])
 
 class FNOBlock1d(eqx.Module):
     spec_conv: eqx.Module
