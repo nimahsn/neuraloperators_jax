@@ -13,7 +13,7 @@ class FourierFeatures(eqx.Module):
             The weights of the sinusoids. If None, they are randomly generated.
         frequency: float, optional
             The frequency of the sinusoids.
-        scale: float, optional
+        scale: float, optionala
             The scale of the sinusoids.
         input_dim: int, optional
             The dimension of the input space.
