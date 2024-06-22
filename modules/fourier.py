@@ -32,8 +32,10 @@ class SpectraclConv1d(eqx.Module):
     in_c: int = eqx.field(static=True)
     out_c: int = eqx.field(static=True)
     modes: int = eqx.field(static=True)
+    norm: str = eqx.field(static=True)
 
-    def __init__(self, in_c: int, out_c: int, modes: int, key: PRNGKeyArray, initializer: jax.nn.initializers.Initializer = None):
+    def __init__(self, in_c: int, out_c: int, modes: int, initializer: jax.nn.initializers.Initializer = None, 
+                 fft_norm: str="ortho", *, key: PRNGKeyArray):
         self.in_c = in_c
         self.out_c = out_c
         self.modes = modes // 2 + 1
@@ -45,6 +47,7 @@ class SpectraclConv1d(eqx.Module):
             scale = 1.0 / (in_c * out_c)
             self.weight_real = random.uniform(key_real, (in_c, out_c, self.modes), minval=-scale, maxval=scale)
             self.weight_imag = random.uniform(key_imag, (in_c, out_c, self.modes), minval=-scale, maxval=scale)
+        self.norm = fft_norm
 
     def __call__(self, x: ArrayLike, **kwargs) -> ArrayLike:
         """
@@ -58,10 +61,10 @@ class SpectraclConv1d(eqx.Module):
             ArrayLike
                 The output tensor. Will be of shape `(out_c, d1)`.
         """
-        x_ft = jnp.fft.rfft(x) # shape: (in_c, d1//2 + 1)
+        x_ft = jnp.fft.rfft(x, norm=self.norm) # shape: (in_c, d1//2 + 1)
         out_ft = jnp.zeros((self.out_c, x_ft.shape[1]), dtype=jnp.complex64) # (out_c, d1//2)
         out_ft = out_ft.at[:, :self.modes].set(jnp.einsum('ik,iok->ok', x_ft[:, :self.modes], self.weight_real + 1j * self.weight_imag))
-        return jnp.fft.irfft(out_ft) # shape: (out_c, d1)        
+        return jnp.fft.irfft(out_ft, norm=self.norm) # shape: (out_c, d1)        
     
 class SpectralConv2d(eqx.Module):
 
@@ -70,8 +73,10 @@ class SpectralConv2d(eqx.Module):
     in_c: int = eqx.field(static=True)
     out_c: int = eqx.field(static=True)
     modes: List[int] = eqx.field(static=True)
+    norm: str = eqx.field(static=True)
 
-    def __init__(self, in_c: int, out_c: int, modes: List[int], key: PRNGKeyArray, initializer: jax.nn.initializers.Initializer):
+    def __init__(self, in_c: int, out_c: int, modes: List[int], initializer: jax.nn.initializers.Initializer, 
+                 fft_norm: str="ortho", *, key: PRNGKeyArray):
         assert all(i % 2 == 0 for i in modes) 
         self.in_c = in_c
         self.out_c = out_c
@@ -80,6 +85,7 @@ class SpectralConv2d(eqx.Module):
         key_1, key_2 = random.split(key)
         self.weight_1 = initializer(key_1, (in_c, out_c, self.modes[0]//2, self.modes[1]), dtype=jnp.complex64)
         self.weight_2 = initializer(key_2, (in_c, out_c, self.modes[0]//2, self.modes[1]), dtype=jnp.complex64)
+        self.norm = fft_norm
 
     def __call__(self, x: Array, **kwargs) -> Array:
         """
@@ -91,7 +97,7 @@ class SpectralConv2d(eqx.Module):
             ArrayLike
                 The output tensor. 
         """
-        x_ft = jnp.fft.rfft2(x)     # (in_c, d1, d2 // 2 + 1)
+        x_ft = jnp.fft.rfft2(x, norm=self.norm)     # (in_c, d1, d2 // 2 + 1)
         out_ft = jnp.zeros((self.out_c, *x_ft.shape[1:]), dtype=jnp.complex64)
         out_ft = out_ft.at[:, :self.modes[0]//2, :self.modes[1]].set(jnp.einsum('ixy,ioxy->oxy', 
                                                                                 x_ft[:, :self.modes[0]//2, :self.modes[1]], 
@@ -99,7 +105,7 @@ class SpectralConv2d(eqx.Module):
         out_ft = out_ft.at[:, -self.modes[0]//2:, :self.modes[1]].set(jnp.einsum('ixy,ioxy->oxy', 
                                                                                  x_ft[:, -self.modes[0]//2:, :self.modes[1]], 
                                                                                  self.weight_2))
-        return jnp.fft.irfft2(out_ft, s=x.shape[1:])
+        return jnp.fft.irfft2(out_ft, s=x.shape[1:], norm=self.norm)
     
 
 class FNOBlock(eqx.Module):
@@ -135,7 +141,7 @@ class FNOBlock1d(FNOBlock):
 
     def __init__(self, in_channels: int, out_channels: int, k_modes: int, activation: Callable, key: PRNGKeyArray):
         key, subkey = random.split(key)
-        spec_conv = SpectraclConv1d(in_channels, out_channels, k_modes, key, glorot_uniform())
+        spec_conv = SpectraclConv1d(in_channels, out_channels, k_modes, glorot_uniform(), key=key)
         residual_net = eqx.nn.Conv1d(in_channels, out_channels, 1, 1, key=subkey)
         super().__init__(in_channels, out_channels, [k_modes], activation, spec_conv, residual_net)
     
@@ -143,7 +149,7 @@ class FNOBlock2d(FNOBlock):
     
     def __init__(self, in_channels: int, out_channels: int, k_modes: List[int], activation: Callable, key: PRNGKeyArray):
         key, subkey = random.split(key)
-        spec_conv = SpectralConv2d(in_channels, out_channels, k_modes, subkey, glorot_uniform())
+        spec_conv = SpectralConv2d(in_channels, out_channels, k_modes, glorot_uniform(), key=key)
         residual_net = eqx.nn.Conv2d(in_channels, out_channels, 1, 1, key=subkey)
         super().__init__(in_channels, out_channels, k_modes, activation, spec_conv, residual_net)
             
@@ -178,4 +184,5 @@ class FNO(eqx.Module):
                 The output tensor. Will be of shape `(out_c, d1)`.
         """
         return self.projection_output(self.fourier_blocks(self.projection_input(x)))
+    
     
