@@ -1,7 +1,221 @@
-from torch.utils.data import Dataset, DataLoader
+"""
+source: https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/DL2/Dynamical_Neural_Networks/Complete_DNN_2_2.html#Time-to-code-a-Neural-PDE-Solver
+"""
+
 import scipy
 import numpy as np
 import jax.numpy as jnp
+import h5py
+import torch
+from typing import Tuple
+from torch.utils import data
+from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
+import numpy as np
+from jax.tree_util import tree_map
+
+#function to torch dataloader from the dataset
+def create_dataloader(data_string: str, mode: str, nt: int, nx: int, batch_size:int, num_workers:int):
+    try:
+        dataset = HDF5Dataset(data_string,mode,nt=nt,nx=nx)
+        loader = DataLoader(dataset,batch_size=batch_size,shuffle=True,num_workers=num_workers)
+    except:
+        raise Exception("Datasets could not be loaded properly")
+
+    return loader
+
+
+#Function to format the data in the correct format
+def to_coords(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    """
+    Transforms the coordinates to a tensor X of shape [time, space, 2].
+    Args:
+        x: spatial coordinates
+        t: temporal coordinates
+    Returns:
+        torch.Tensor: X[..., 0] is the space coordinate (in 2D)
+                      X[..., 1] is the time coordinate (in 2D)
+    """
+    x_, t_ = torch.meshgrid(x, t)
+    x_, t_ = x_.T, t_.T
+    return torch.stack((x_, t_), -1)
+
+#Helper class to open the .h5 formated file
+class TimeWindowDataset(Dataset):
+    """
+    Loads an HDF5 PDE dataset and samples a window of history and future time points from each trajectory.
+
+    Args:
+        path: str, path to the HDF5 file.
+        mode: str, the mode to load the dataset in. Can be 'train', 'val', or 'test'.
+        nt: int, the number of time points in the trajectory.
+        nx: int, the number of spatial points in the trajectory.
+        time_history: int, the number of time points in the history.
+        time_future: int, the number of time points in the future.
+
+    """
+
+    def __init__(self, path: str, nt: int, nx: int, history_steps: int, future_steps: int, mode: str, 
+                 load_all: bool=False):      
+        self.nt = nt
+        self.nx = nx
+        self.history_steps = history_steps
+        self.future_steps = future_steps
+        self.mode = mode
+        self.max_start_time = self.nt - self.history_steps - self.future_steps
+        f = h5py.File(path, 'r')
+        self.data = f[self.mode]
+        self.dataset = f'pde_{nt}-{nx}'
+        self.load_all = load_all
+        if load_all:
+            data = {self.dataset: self.data[self.dataset][:],
+                    'x': self.data['x'][:],
+                    't': self.data['t'][:]}
+            f.close()
+            self.data = data
+
+    def __len__(self):
+        return self.max_start_time * self.data[self.dataset].shape[0]
+    
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Returns data items for batched training/validation/testing.
+        Args:
+            idx: data index
+        Returns:
+            torch.Tensor: data trajectory used for training/validation/testing
+            torch.Tensor: dx
+            torch.Tensor: dt
+        """
+        # Get the trajectory index and the starting time index
+        traj_idx = idx // self.max_start_time
+        start_time = idx % self.max_start_time
+
+        history = self.data[self.dataset][traj_idx, start_time:start_time + self.history_steps]
+        future = self.data[self.dataset][traj_idx, start_time + self.history_steps:
+                                         start_time + self.history_steps + self.future_steps]
+
+        dx = self.data['x'][traj_idx, 1] - self.data['x'][traj_idx, 0]
+        dt = self.data['t'][traj_idx, 1] - self.data['t'][traj_idx, 0]
+
+        return history, future, dx, dt 
+
+class HDF5Dataset(Dataset):
+    """
+    Load samples of an PDE Dataset, get items according to PDE.
+    """
+    def __init__(self, path: str,
+                 mode: str,
+                 nt: int,
+                 nx: int,
+                 dtype=torch.float64,
+                 load_all: bool=False):
+        """Initialize the dataset object.
+        Args:
+            path: path to dataset
+            mode: [train, valid, test]
+            nt: temporal resolution
+            nx: spatial resolution
+            shift: [fourier, linear]
+            pde: PDE at hand
+            dtype: floating precision of data
+            load_all: load all the data into memory
+        """
+        super().__init__()
+        f = h5py.File(path, 'r')
+        self.mode = mode
+        self.dtype = dtype
+        self.data = f[self.mode]
+        self.dataset = f'pde_{nt}-{nx}'
+
+        if load_all:
+            data = {self.dataset: self.data[self.dataset][:]}
+            f.close()
+            self.data = data
+
+    def __len__(self):
+        return self.data[self.dataset].shape[0]
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Returns data items for batched training/validation/testing.
+        Args:
+            idx: data index
+        Returns:
+            torch.Tensor: data trajectory used for training/validation/testing
+            torch.Tensor: dx
+            torch.Tensor: dt
+        """
+        u = self.data[self.dataset][idx]
+        x = self.data['x'][idx]
+        t = self.data['t'][idx]
+        dx = self.data['dx'][idx]
+        dt = self.data['dt'][idx]
+
+
+        if self.mode == "train":
+            X = to_coords(torch.tensor(x), torch.tensor(t))
+            sol = (torch.tensor(u), X)
+
+            u = sol[0]
+            X = sol[1]
+            dx = X[0, 1, 0] - X[0, 0, 0]
+            dt = X[1, 0, 1] - X[0, 0, 1]
+        else:
+            u = torch.from_numpy(u)
+            dx = torch.tensor([dx])
+            dt = torch.tensor([dt])
+        return u.float(), dx.float(), dt.float()
+
+#function to create x - y data pairs: 20 past timepoints as x, 20 future timepoints as y
+def create_data(datapoints: torch.Tensor, start_time: list, time_future: int, time_history: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Getting data of PDEs for training, validation and testing.
+    Args:
+        datapoints (torch.Tensor): trajectory input
+        start_time (int list): list of different starting times for different trajectories in one batch
+        pf_steps (int): push forward steps
+    Returns:
+        torch.Tensor: neural network input data
+        torch.Tensor: neural network labels
+    """
+    data = torch.Tensor()
+    labels = torch.Tensor()
+    # Loop over batch and different starting points
+    # For every starting point, we take the number of time_history points as training data
+    # and the number of time future data as labels
+    for (dp, start) in zip(datapoints, start_time):
+        end_time = start+time_history
+        d = dp[start:end_time]
+        target_start_time = end_time
+        target_end_time = target_start_time + time_future
+        l = dp[target_start_time:target_end_time]
+
+        data = torch.cat((data, d[None, :]), 0)
+        labels = torch.cat((labels, l[None, :]), 0)
+
+    return data, labels
+
+def numpy_collate(batch):
+  return tree_map(np.asarray, data.default_collate(batch))
+
+class NumpyLoader(DataLoader):
+  def __init__(self, dataset, batch_size=1,
+                shuffle=False, sampler=None,
+                batch_sampler=None, num_workers=0,
+                pin_memory=False, drop_last=False,
+                timeout=0, worker_init_fn=None):
+    super(self.__class__, self).__init__(dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        sampler=sampler,
+        batch_sampler=batch_sampler,
+        num_workers=num_workers,
+        collate_fn=numpy_collate,
+        pin_memory=pin_memory,
+        drop_last=drop_last,
+        timeout=timeout,
+        worker_init_fn=worker_init_fn)
 
 def load_mat_data(path):
     """
