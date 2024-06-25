@@ -83,6 +83,11 @@ def fit_plain(model: eqx.Module,
     - callbacks: List[Callable[[eqx.Module, optax.OptState, int], None], a list of callback functions to be called after each epoch. \
         Each callback function should take the model, optimizer state, and epoch number as arguments.
     - print_every: int, the number of steps between reporting the training and validation loss. If None, no printing is performed.
+
+    Returns:
+    - model: eqx.Module, the trained model
+    - opt_state: optax.OptState, the final optimizer state
+    - history: Dict[str, ArrayLike], a dictionary containing the training and validation loss history
     """
     if opt_state is None:
         opt_state = optimizer.init(eqx.filter(model, eqx.is_array_like))
@@ -95,13 +100,13 @@ def fit_plain(model: eqx.Module,
     jitted_loss_fn_batch = eqx.filter_jit(loss_fn_batch)
 
     for epoch in range(num_epochs):
-        for step, (inputs, outputs) in enumerate(dataloader_train):
+        for step, (inputs, outputs, *_) in enumerate(dataloader_train):
             model, opt_state, loss = stepping_fn(model, inputs, outputs, loss_fn_batch, optimizer, opt_state, loss_has_aux)
             if print_every is not None and step % print_every == 0:
                 print(f"Epoch {epoch}, step {step}, loss: {loss}")
         if dataloader_val is not None:
             val_loss = 0
-            for inputs, outputs in dataloader_val:
+            for inputs, outputs, *_ in dataloader_val:
                 val_loss += jitted_loss_fn_batch(model, inputs, outputs)
             val_loss /= len(dataloader_val)
             print(f"Validation loss: {val_loss}")
