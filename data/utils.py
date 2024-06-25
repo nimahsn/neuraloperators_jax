@@ -84,8 +84,8 @@ class TimeWindowDataset(Dataset):
             idx: data index
         Returns:
             torch.Tensor: data trajectory used for training/validation/testing
-            torch.Tensor: dx
             torch.Tensor: dt
+            torch.Tensor: dx
         """
         # Get the trajectory index and the starting time index
         traj_idx = idx // self.max_start_time
@@ -98,7 +98,7 @@ class TimeWindowDataset(Dataset):
         dx = self.data['x'][traj_idx, 1] - self.data['x'][traj_idx, 0]
         dt = self.data['t'][traj_idx, 1] - self.data['t'][traj_idx, 0]
 
-        return history, future, dx, dt 
+        return history, future, dt, dx
 
 class HDF5Dataset(Dataset):
     """

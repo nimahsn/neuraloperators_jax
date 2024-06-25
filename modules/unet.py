@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 from typing import Callable, Tuple, Union, List
-from jax.typing import PRNGKeyArray
+from jaxtyping import PRNGKeyArray
 
 class DoubleConv(eqx.Module):
     conv1: eqx.modules.Conv

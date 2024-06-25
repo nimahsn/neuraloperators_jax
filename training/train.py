@@ -4,7 +4,7 @@ import optax
 import equinox as eqx
 from torch.utils.data import DataLoader
 from typing import Callable, Tuple, List, Sequence, Dict
-from jax.typing import PRNGKey, ArrayLike
+from jaxtyping import ArrayLike
 import torch.utils.data
 import os, sys
 

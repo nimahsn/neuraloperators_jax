@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 from typing import List, Union, Tuple
-from jax.typing import ArrayLike
+from jaxtyping import ArrayLike
 
 def fourier_shift(u: ArrayLike, eps: float=0., dim: int=-1, order: int=0) -> jax.Array:
     """
