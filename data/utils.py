@@ -17,7 +17,7 @@ from jax.tree_util import tree_map
 #function to torch dataloader from the dataset
 def create_dataloader(data_string: str, mode: str, nt: int, nx: int, batch_size:int, num_workers:int):
     try:
-        dataset = HDF5Dataset(data_string,mode,nt=nt,nx=nx)
+        dataset = TrajectoryDataset(data_string,mode,nt=nt,nx=nx)
         loader = DataLoader(dataset,batch_size=batch_size,shuffle=True,num_workers=num_workers)
     except:
         raise Exception("Datasets could not be loaded properly")
@@ -100,7 +100,7 @@ class TimeWindowDataset(Dataset):
 
         return history, future, dt, dx
 
-class HDF5Dataset(Dataset):
+class TrajectoryDataset(Dataset):
     """
     Load samples of an PDE Dataset, get items according to PDE.
     """
@@ -108,64 +108,41 @@ class HDF5Dataset(Dataset):
                  mode: str,
                  nt: int,
                  nx: int,
-                 dtype=torch.float64,
+                 dtype=np.float64,
                  load_all: bool=False):
-        """Initialize the dataset object.
-        Args:
-            path: path to dataset
-            mode: [train, valid, test]
-            nt: temporal resolution
-            nx: spatial resolution
-            shift: [fourier, linear]
-            pde: PDE at hand
-            dtype: floating precision of data
-            load_all: load all the data into memory
-        """
-        super().__init__()
-        f = h5py.File(path, 'r')
+        self.nt = nt
+        self.nx = nx
         self.mode = mode
         self.dtype = dtype
+        f = h5py.File(path, 'r')
         self.data = f[self.mode]
         self.dataset = f'pde_{nt}-{nx}'
-
         if load_all:
-            data = {self.dataset: self.data[self.dataset][:]}
+            data = {self.dataset: self.data[self.dataset][:],
+                    'x': self.data['x'][:],
+                    't': self.data['t'][:]}
             f.close()
             self.data = data
 
     def __len__(self):
         return self.data[self.dataset].shape[0]
-
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    
+    def __getitem__(self, idx: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Returns data items for batched training/validation/testing.
         Args:
             idx: data index
         Returns:
-            torch.Tensor: data trajectory used for training/validation/testing
-            torch.Tensor: dx
-            torch.Tensor: dt
+            np.ndarray: data trajectory used for training/validation/testing
+            np.ndarray: dx
+            np.ndarray: dt
         """
         u = self.data[self.dataset][idx]
         x = self.data['x'][idx]
         t = self.data['t'][idx]
-        dx = self.data['dx'][idx]
-        dt = self.data['dt'][idx]
-
-
-        if self.mode == "train":
-            X = to_coords(torch.tensor(x), torch.tensor(t))
-            sol = (torch.tensor(u), X)
-
-            u = sol[0]
-            X = sol[1]
-            dx = X[0, 1, 0] - X[0, 0, 0]
-            dt = X[1, 0, 1] - X[0, 0, 1]
-        else:
-            u = torch.from_numpy(u)
-            dx = torch.tensor([dx])
-            dt = torch.tensor([dt])
-        return u.float(), dx.float(), dt.float()
+        dx = x[1] - x[0]
+        dt = t[1] - t[0]
+        return u, dx, dt
 
 #function to create x - y data pairs: 20 past timepoints as x, 20 future timepoints as y
 def create_data(datapoints: torch.Tensor, start_time: list, time_future: int, time_history: int) -> Tuple[torch.Tensor, torch.Tensor]:

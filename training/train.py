@@ -64,7 +64,8 @@ def fit_plain(model: eqx.Module,
                                          Tuple[eqx.Module, optax.OptState, ArrayLike]] = train_step,
                 callbacks: List[Callable[[eqx.Module, optax.OptState, int], None]] = [],
                 history: Dict[str, ArrayLike] = None,
-                print_every: int=100) -> eqx.Module:
+                print_every: int=100,
+                **kwargs) -> Tuple[eqx.Module, optax.OptState, Dict[str, ArrayLike]]:
     """
     A plain fit function for training a model.
 
@@ -83,6 +84,7 @@ def fit_plain(model: eqx.Module,
     - callbacks: List[Callable[[eqx.Module, optax.OptState, int], None], a list of callback functions to be called after each epoch. \
         Each callback function should take the model, optimizer state, and epoch number as arguments.
     - print_every: int, the number of steps between reporting the training and validation loss. If None, no printing is performed.
+    - kwargs: additional keyword arguments to be passed to the train_step_fn
 
     Returns:
     - model: eqx.Module, the trained model
@@ -101,7 +103,7 @@ def fit_plain(model: eqx.Module,
 
     for epoch in range(num_epochs):
         for step, (inputs, outputs, *_) in enumerate(dataloader_train):
-            model, opt_state, loss = stepping_fn(model, inputs, outputs, loss_fn_batch, optimizer, opt_state, loss_has_aux)
+            model, opt_state, loss, *aux = stepping_fn(model, inputs, outputs, loss_fn_batch, optimizer, opt_state, loss_has_aux, **kwargs)
             if print_every is not None and step % print_every == 0:
                 print(f"Epoch {epoch}, step {step}, loss: {loss}")
         if dataloader_val is not None:
@@ -117,4 +119,3 @@ def fit_plain(model: eqx.Module,
 
     return model, opt_state, history
 
-    
