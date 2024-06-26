@@ -143,6 +143,22 @@ class TrajectoryDataset(Dataset):
         dx = x[1] - x[0]
         dt = t[1] - t[0]
         return u, dx, dt
+    
+    def get_sample(self, idx: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Returns a single sample of the dataset along with spatial and temporal mesh.
+        Args:
+            idx: data index
+        Returns:
+            np.ndarray: PDE trajectory
+            np.ndarray: Temporal coordinates
+            np.ndarray: Spatial coordinates
+        """
+        u, dx, dt = self.__getitem__(idx)
+        x = np.linspace(0, self.nx * dx, self.nx)
+        t = np.linspace(0, self.nt * dt, self.nt)
+        X, T = np.meshgrid(x, t)
+        return u, T, X
 
 #function to create x - y data pairs: 20 past timepoints as x, 20 future timepoints as y
 def create_data(datapoints: torch.Tensor, start_time: list, time_future: int, time_history: int) -> Tuple[torch.Tensor, torch.Tensor]:
