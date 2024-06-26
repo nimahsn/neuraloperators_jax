@@ -36,6 +36,7 @@ def checkpoint_callback(checkpoint_dir: str, checkpoint_name: str, hyper_params:
             name = checkpoint_name + f"_epoch_{epoch}"
             path = os.path.join(checkpoint_dir, name)
             save_model(path, hyper_params, model)
+            print(f"Checkpoint saved at {path}")
 
     return checkpoint_cb
 
