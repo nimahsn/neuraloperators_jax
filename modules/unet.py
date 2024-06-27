@@ -5,17 +5,18 @@ from typing import Callable, Tuple, Union, List
 from jaxtyping import PRNGKeyArray
 
 class DoubleConv(eqx.Module):
-    conv1: eqx.modules.Conv
-    conv2: eqx.modules.Conv
-    activation: Callable
+    conv1: eqx.nn.Conv
+    conv2: eqx.nn.Conv
+    activation: Callable = eqx.field(static=True)
 
     def __init__(self, num_spatial_dims: int, in_channels: int, out_channels: int, activation: Callable, 
                  kernel_size: int = 3, padding: Union[int, str] = "valid", *args, key: PRNGKeyArray):
         key1, key2 = jax.random.split(key, 2)
-        self.conv1 = eqx.modules.Conv(num_spatial_dims, in_channels, out_channels, kernel_size, 
-                                      padding, *args, key=key1)
-        self.conv2 = eqx.modules.Conv(num_spatial_dims, out_channels, out_channels, kernel_size,
-                                      padding, *args, key=key2)
+        self.conv1 = eqx.nn.Conv(num_spatial_dims, in_channels, out_channels, kernel_size, 
+                                      1, padding, *args, key=key1)
+        self.conv2 = eqx.nn.Conv(num_spatial_dims, out_channels, out_channels, kernel_size,
+                                      1, padding, *args, key=key2)
+        self.activation = activation
 
     def __call__(self, x: jax.Array) -> jax.Array:
         """
@@ -64,9 +65,9 @@ class UNetConv(eqx.Module):
 
         key, lift_key, proj_key = jax.random.split(key, 3)
         self.lifting_block = eqx.nn.Conv(num_spatial_dims, num_input_channels, num_lifted_channels, conv_kernel_size, 
-                                              conv_padding, key=lift_key)
-        self.projection_block = eqx.nn.Conv(num_spatial_dims, list_num_channels[-1], num_output_channels, 1, 
-                                              conv_padding, key=proj_key)
+                                              1, conv_padding, key=lift_key)
+        self.projection_block = eqx.nn.Conv(num_spatial_dims, list_num_channels[0], num_output_channels, 1, 
+                                              1, conv_padding, key=proj_key)
         
         self.downsample_blocks = []
         self.left_blocks = []
@@ -80,11 +81,10 @@ class UNetConv(eqx.Module):
                                                       downsample_stride, downsample_padding, key=down_key))
             self.left_blocks.append(DoubleConv(num_spatial_dims, up_c, down_c, activation, conv_kernel_size,
                                                 conv_padding, key=left_key))
-            self.right_blocks.append(DoubleConv(num_spatial_dims, down_c, up_c, activation, conv_kernel_size,
+            self.right_blocks.insert(0, DoubleConv(num_spatial_dims, down_c, up_c, activation, conv_kernel_size,
                                                  conv_padding, key=right_key))
-            self.upsample_blocks.append(eqx.nn.ConvTranspose(num_spatial_dims, up_c, down_c, downsample_kernel_size, 
-                                                           downsample_stride, downsample_padding, key=up_key))
-            
+            self.upsample_blocks.insert(0, eqx.nn.ConvTranspose(num_spatial_dims, down_c, up_c, downsample_kernel_size, 
+                                                           downsample_stride, padding=1, output_padding=1, key=up_key))
     
     def __call__(self, x: jax.Array) -> jax.Array:
         """
