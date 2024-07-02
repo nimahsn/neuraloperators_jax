@@ -41,7 +41,7 @@ def test_unrolling(model: eqx.Module,
         predictions = predictions.at[:, :history_steps].set(u_input)
         inputs = u_input
         for i in range(num_iters):
-            preds = eqx.filter_vmap(model)(inputs)
+            preds = eqx.filter_jit(eqx.filter_vmap(model))(inputs)
             predictions = predictions.at[:, history_steps + i*future_steps:history_steps + (i+1)*future_steps].set(preds)
             inputs = predictions[:, (i+1)*future_steps:history_steps + (i+1)*future_steps]
         preds = predictions[:total_steps]

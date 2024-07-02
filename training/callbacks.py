@@ -16,6 +16,7 @@ import optax
 from typing import Callable, Dict
 from jaxtyping import ArrayLike, PRNGKeyArray
 from utils.serial import save_model
+from training.metrics import test_unrolling
 from pathlib import Path
 
 def checkpoint_callback(checkpoint_dir: str, checkpoint_name: str, hyper_params: Dict, save_every: int = 10) -> Callable[[eqx.Module, optax.OptState, int], None]:
@@ -39,4 +40,12 @@ def checkpoint_callback(checkpoint_dir: str, checkpoint_name: str, hyper_params:
             print(f"Checkpoint saved at {path}")
 
     return checkpoint_cb
+
+def unrolling_test_callback(trajectories: str, history_steps: int, future_steps: int, total_steps: int, test_every: int = 10):
+
+    def unrolling_cb(model, opt_state, epoch):
+        if epoch % test_every == 0:
+            error = test_unrolling(model, trajectories, history_steps, future_steps, total_steps, "mean")
+            print(f"Unrolling test error at epoch {epoch}: {error.item()}")
+    return unrolling_cb
 
