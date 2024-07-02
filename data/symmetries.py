@@ -104,8 +104,8 @@ def gallilean_group(sample: Tuple[jax.Array], length: float=None, eps: float=0.,
 
     u, X = sample
     if length is None:
-        length = X[0, -1, 1]
-    t = X[:, 0, 0]
+        length = X[1, 0, -1]
+    t = X[0, :, 0]
     shift = -(eps * t[:, None]) / length
     output = shift_fn(u, eps=shift, dim=-1) - eps, X
     return output
