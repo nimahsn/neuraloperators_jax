@@ -81,9 +81,8 @@ def scale_group(sample: Tuple[jax.Array], eps: float=0., shift_fn=fourier_shift)
     """    
 
     u, X = sample
-    
-    X = X.at[..., 1].mul(jnp.exp(-eps))
-    X = X.at[..., 0].mul(jnp.exp(-3*eps))
+    X = X.at[0, ...].set(X[0, ...] * jnp.exp(-3 * eps))
+    X = X.at[1, ...].set(X[1, ...] * jnp.exp(-eps))
     u = u * jnp.exp(2 * eps)
 
     return u, X
