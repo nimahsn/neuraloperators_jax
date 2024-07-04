@@ -12,7 +12,9 @@ from torch.utils import data
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 import numpy as np
+import jax
 from jax.tree_util import tree_map
+from jaxtyping import ArrayLike, PRNGKeyArray
 
 #function to torch dataloader from the dataset
 def create_dataloader(data_string: str, mode: str, nt: int, nx: int, batch_size:int, num_workers:int):
@@ -98,6 +100,43 @@ class TimeWindowDataset(Dataset):
         dx = self.data['x'][traj_idx, 1] - self.data['x'][traj_idx, 0]
         dt = self.data['t'][traj_idx, 1] - self.data['t'][traj_idx, 0]
 
+        return history, future, dt, dx
+
+class AugmentedTimeWindowDataset(TimeWindowDataset):
+    """
+    Loads an HDF5 PDE dataset and samples a window of history and future time points from each trajectory. The samples are augmented with the given transformations.
+
+    Args:
+        path: str, path to the HDF5 file.
+        mode: str, the mode to load the dataset in. Can be 'train', 'val', or 'test'.
+        nt: int, the number of time points in the trajectory.
+        nx: int, the number of spatial points in the trajectory.
+        time_history: int, the number of time points in the history.
+        time_future: int, the number of time points in the future.
+        list_transforms: list[Callable], a list of transformations to apply to the samples. Each transformation accepts a sample and a parameter and returns a transformed sample.
+    """
+
+    def __init__(self, path: str, nt: int, nx: int, history_steps: int, future_steps: int, mode: str, list_transforms: list, load_all: bool=False, *, key: PRNGKeyArray=None):
+        super().__init__(path, nt, nx, history_steps, future_steps, mode, load_all)
+        self.list_transforms = list_transforms
+        self.key = key
+        self.num_transforms = len(list_transforms)
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        traj_idx = idx // self.max_start_time
+        start_time = idx % self.max_start_time
+        x = self.data['x'][traj_idx]
+        t = self.data['t'][traj_idx]
+        X, T = np.meshgrid(x, t)
+        TX = np.stack([T, X])
+        U = self.data[self.dataset][traj_idx]
+        *keys, self.key = jax.random.split(self.key, self.num_transforms + 1)
+        for transform, key in zip(self.list_transforms, keys):
+            U, TX = transform((U, TX), key=key)                   
+        history = U[start_time:start_time + self.history_steps]
+        future = U[start_time + self.history_steps:start_time + self.history_steps + self.future_steps]
+        dx = x[1] - x[0]
+        dt = t[1] - t[0]
         return history, future, dt, dx
 
 class TrajectoryDataset(Dataset):
