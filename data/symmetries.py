@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 from typing import List, Union, Tuple
-from jaxtyping import ArrayLike
+from jaxtyping import ArrayLike, PRNGKeyArray
 
 def fourier_shift(u: ArrayLike, eps: float=0., dim: int=-1, order: int=0) -> jax.Array:
     """
@@ -48,7 +48,7 @@ def to_coords(t: jax.Array, x: jax.Array) -> jax.Array:
     T, X = jnp.meshgrid(t, x)
     return jnp.stack([T, X], axis=-1)
 
-def translation_group(sample: Tuple[jax.Array], eps: float=0., shift_fn=fourier_shift) -> jax.Array:
+def translation_group(sample: Tuple[jax.Array], eps: float=None, min_eps=-0.5, max_eps=0.5, shift_fn=fourier_shift, *, key: PRNGKeyArray=None) -> jax.Array:
     """
     Apply the spatial translation group transformation to a sample.
 
@@ -61,12 +61,13 @@ def translation_group(sample: Tuple[jax.Array], eps: float=0., shift_fn=fourier_
     Returns:
         A tuple of the form (u', X) where u' is the transformed field.
     """
-
+    if eps is None:
+        eps = jax.random.uniform(key, shape=(), minval=min_eps, maxval=max_eps)
     u, X = sample
     output = shift_fn(u, eps=eps, dim=-1)
     return output, X
 
-def scale_group(sample: Tuple[jax.Array], eps: float=0., shift_fn=fourier_shift) -> jax.Array:
+def scale_group(sample: Tuple[jax.Array], eps: float=None, min_eps=-0.5, max_eps=0.5, shift_fn=fourier_shift, *, key: PRNGKeyArray=None) -> jax.Array:
     """
     Apply the scale group transformation to a sample.
 
@@ -79,7 +80,8 @@ def scale_group(sample: Tuple[jax.Array], eps: float=0., shift_fn=fourier_shift)
     Returns:
         A tuple of the form (u', X) where u' is the transformed field.
     """    
-
+    if eps is None:
+        eps = jax.random.uniform(key, shape=(), minval=min_eps, maxval=max_eps)
     u, X = sample
     X = X.at[0, ...].set(X[0, ...] * jnp.exp(-3 * eps))
     X = X.at[1, ...].set(X[1, ...] * jnp.exp(-eps))
@@ -87,7 +89,7 @@ def scale_group(sample: Tuple[jax.Array], eps: float=0., shift_fn=fourier_shift)
 
     return u, X
 
-def gallilean_group(sample: Tuple[jax.Array], length: float=None, eps: float=0., shift_fn=fourier_shift) -> jax.Array:
+def gallilean_group(sample: Tuple[jax.Array], eps: float=None, min_eps=-0.5, max_eps=0.5, shift_fn=fourier_shift, *, key: PRNGKeyArray=None) -> jax.Array:
     """
     Apply the Gallilean group transformation to a sample.
 
@@ -100,10 +102,10 @@ def gallilean_group(sample: Tuple[jax.Array], length: float=None, eps: float=0.,
     Returns:
         A tuple of the form (u', X) where u' is the transformed field.
     """
-
+    if eps is None:
+        eps = jax.random.uniform(key, shape=(), minval=min_eps, maxval=max_eps)
     u, X = sample
-    if length is None:
-        length = X[1, 0, -1]
+    length = X[1, 0, -1]
     t = X[0, :, 0]
     shift = -(eps * t[:, None]) / length
     output = shift_fn(u, eps=shift, dim=-1) - eps, X
