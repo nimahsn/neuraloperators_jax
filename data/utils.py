@@ -139,6 +139,15 @@ class AugmentedTimeWindowDataset(TimeWindowDataset):
         dt = t[1] - t[0]
         return history, future, dt, dx
 
+    @partial(jax.jit, static_argnames=('self', 'transforms'))
+    def jitted_augmenter(self, U: ArrayLike, t: ArrayLike, x: ArrayLike, transforms: List[callable], key: PRNGKeyArray):
+        X, T = jnp.meshgrid(x, t)
+        TX = jnp.stack([T, X])
+        *keys , key = jax.random.split(key, len(transforms) + 1)
+        for transform, subkey in zip(transforms, keys):
+            U, TX = transform(U, TX, key=subkey)
+        return U, TX, key
+        
 class TrajectoryDataset(Dataset):
     """
     Load samples of an PDE Dataset, get items according to PDE.

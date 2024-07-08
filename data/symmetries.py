@@ -48,7 +48,7 @@ def to_coords(t: jax.Array, x: jax.Array) -> jax.Array:
     T, X = jnp.meshgrid(t, x)
     return jnp.stack([T, X], axis=-1)
 
-def translation_group(sample: Tuple[jax.Array], eps: float=None, min_eps=-0.5, max_eps=0.5, shift_fn=fourier_shift, *, key: PRNGKeyArray=None) -> jax.Array:
+def translation_group(u, X, eps: float=None, min_eps=-0.5, max_eps=0.5, shift_fn=fourier_shift, *, key: PRNGKeyArray=None) -> jax.Array:
     """
     Apply the spatial translation group transformation to a sample.
 
@@ -63,11 +63,11 @@ def translation_group(sample: Tuple[jax.Array], eps: float=None, min_eps=-0.5, m
     """
     if eps is None:
         eps = jax.random.uniform(key, shape=(), minval=min_eps, maxval=max_eps)
-    u, X = sample
+    # u, X = sample
     output = shift_fn(u, eps=eps, dim=-1)
     return output, X
 
-def scale_group(sample: Tuple[jax.Array], eps: float=None, min_eps=-0.5, max_eps=0.5, shift_fn=fourier_shift, *, key: PRNGKeyArray=None) -> jax.Array:
+def scale_group(u, X, eps: float=None, min_eps=-0.5, max_eps=0.5, shift_fn=fourier_shift, *, key: PRNGKeyArray=None) -> jax.Array:
     """
     Apply the scale group transformation to a sample.
 
@@ -82,14 +82,14 @@ def scale_group(sample: Tuple[jax.Array], eps: float=None, min_eps=-0.5, max_eps
     """    
     if eps is None:
         eps = jax.random.uniform(key, shape=(), minval=min_eps, maxval=max_eps)
-    u, X = sample
+    # u, X = sample
     X = X.at[0, ...].set(X[0, ...] * jnp.exp(-3 * eps))
     X = X.at[1, ...].set(X[1, ...] * jnp.exp(-eps))
     u = u * jnp.exp(2 * eps)
 
     return u, X
 
-def gallilean_group(sample: Tuple[jax.Array], eps: float=None, min_eps=-0.5, max_eps=0.5, shift_fn=fourier_shift, *, key: PRNGKeyArray=None) -> jax.Array:
+def gallilean_group(u, X, eps: float=None, min_eps=-0.5, max_eps=0.5, shift_fn=fourier_shift, *, key: PRNGKeyArray=None) -> jax.Array:
     """
     Apply the Gallilean group transformation to a sample.
 
@@ -104,7 +104,7 @@ def gallilean_group(sample: Tuple[jax.Array], eps: float=None, min_eps=-0.5, max
     """
     if eps is None:
         eps = jax.random.uniform(key, shape=(), minval=min_eps, maxval=max_eps)
-    u, X = sample
+    # u, X = sample
     length = X[1, 0, -1]
     t = X[0, :, 0]
     shift = -(eps * t[:, None]) / length

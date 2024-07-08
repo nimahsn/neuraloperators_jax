@@ -2,14 +2,18 @@ import jax
 import jax.numpy as jnp
 import optax
 import equinox as eqx
+from training.losses import loss_mse
 from torch.utils.data import DataLoader
 from typing import Callable, Tuple, List, Sequence, Dict
-from jaxtyping import ArrayLike
+from jaxtyping import ArrayLike, PRNGKeyArray
 import torch.utils.data
 import os, sys
+from functools import partial
 
 TRAIN_LOSS_KEY = "train_loss"
 VAL_LOSS_KEY = "val_loss"
+EQUIVARIANCE_LOSS_KEY = "equivariance_loss"
+REGRESSION_LOSS_KEY = "regression_loss"
 
 
 def train_step(model: eqx.Module, 
@@ -72,7 +76,8 @@ def fit_plain(model: eqx.Module,
     Args:
     - model: eqx.Module, the model to be trained
     - dataloader_train: DataLoader, the training data loader
-    - loss_fn_batch: Callable[[eqx.Module, ArrayLike, ArrayLike], ArrayLike], the loss function for a batch of data. Should be vmapped.
+    - loss_fn_batch: Callable[[eqx.Module, ArrayLike, ArrayLike], ArrayLike], the loss function for a batch of data. \
+        Should be vmapped.
     - optimizer: optax.GradientTransformation, the optimizer to be used
     - num_epochs: int, the number of epochs to train the model
     - dataloader_val: DataLoader, the validation data loader. If None, no validation is performed.
@@ -80,7 +85,8 @@ def fit_plain(model: eqx.Module,
     - loss_has_aux: bool, whether the loss function returns an auxiliary output
     - train_step_fn: Callable[[eqx.Module, ArrayLike, ArrayLike, Callable[[eqx.Module, ArrayLike, ArrayLike], \
         ArrayLike], optax.GradientTransformation, optax.OptState, bool], Tuple[eqx.Module, optax.OptState, ArrayLike]], \
-            the function to be used for a single training step. Default is train_step. The given function will be jitted with eqx.filter_jit.
+            the function to be used for a single training step. Default is train_step. The given function will be jitted\
+                  with eqx.filter_jit.
     - callbacks: List[Callable[[eqx.Module, optax.OptState, int], None], a list of callback functions to be called after each epoch. \
         Each callback function should take the model, optimizer state, and epoch number as arguments.
     - print_every: int, the number of steps between reporting the training and validation loss. If None, no printing is performed.
@@ -103,7 +109,8 @@ def fit_plain(model: eqx.Module,
 
     for epoch in range(num_epochs):
         for step, (inputs, outputs, *_) in enumerate(dataloader_train):
-            model, opt_state, loss, *aux = stepping_fn(model, inputs, outputs, loss_fn_batch, optimizer, opt_state, loss_has_aux, **kwargs)
+            model, opt_state, loss, *aux = stepping_fn(model, inputs, outputs, loss_fn_batch, optimizer, opt_state, 
+                                                       loss_has_aux, **kwargs)
             if print_every is not None and step % print_every == 0:
                 print(f"Epoch {epoch}, step {step}, loss: {loss}")
         if dataloader_val is not None:
@@ -117,5 +124,129 @@ def fit_plain(model: eqx.Module,
         for callback in callbacks:
             callback(model, opt_state, epoch)
 
+    return model, opt_state, history
+
+def fit_symmetric(model: eqx.Module, 
+                dataloader_train: DataLoader, 
+                symmetries: List[Callable],
+                optimizer: optax.GradientTransformation,
+                num_epochs: int,
+                window_size: int,
+                total_steps: int,
+                pushback_steps: int=0,
+                dataloader_val: DataLoader=None,
+                opt_state: optax.OptState=None,
+                callbacks: List[Callable[[eqx.Module, optax.OptState, int], None]] = [],
+                history: Dict[str, ArrayLike] = None,
+                print_every: int=100,
+                *,
+                key: PRNGKeyArray,
+                **kwargs) -> Tuple[eqx.Module, optax.OptState, Dict[str, ArrayLike]]:
+    """
+    A symmetry enforcing fit function for training a model.
+
+    Args:
+    - model: eqx.Module, the model to be trained
+    - dataloader_train: DataLoader, the training data loader
+    - loss_fn_batch: Callable[[eqx.Module, ArrayLike, ArrayLike], ArrayLike], the loss function for a batch of data. Should be vmapped.
+    - optimizer: optax.GradientTransformation, the optimizer to be used
+    - num_epochs: int, the number of epochs to train the model
+    - dataloader_val: DataLoader, the validation data loader. If None, no validation is performed.
+    - opt_state: optax.OptState, the optimizer state. If None, the optimizer state is initialized.
+    - loss_has_aux: bool, whether the loss function returns an auxiliary output
+    - train_step_fn: Callable[[eqx.Module, ArrayLike, ArrayLike, Callable[[eqx.Module, ArrayLike, ArrayLike], \
+        ArrayLike], optax.GradientTransformation, optax.OptState, bool], Tuple[eqx.Module, optax.OptState, ArrayLike]], \
+            the function to be used for a single training step. Default is train_step. The given function will be jitted with \
+                eqx.filter_jit.
+    - callbacks: List[Callable[[eqx.Module, optax.OptState, int], None], a list of callback functions to be called after each epoch. \
+        Each callback function should take the model, optimizer state, and epoch number as arguments.
+    - print_every: int, the number of steps between reporting the training and validation loss. If None, no printing is performed.
+    - kwargs: additional keyword arguments to be passed to the train_step_fn
+
+    Returns:
+    - model: eqx.Module, the trained model
+    - opt_state: optax.OptState, the final optimizer state
+    - history: Dict[str, ArrayLike], a dictionary containing the training and validation loss history
+    """
+    if opt_state is None:
+        opt_state = optimizer.init(eqx.filter(model, eqx.is_array_like))
+    if history is None:
+        history = {TRAIN_LOSS_KEY: [], EQUIVARIANCE_LOSS_KEY: [], REGRESSION_LOSS_KEY: []}
+        if dataloader_val is not None:
+            history[VAL_LOSS_KEY] = []
+
+    max_start_time = total_steps - (2 * window_size + pushback_steps * window_size)
+    start_times = jnp.arange(max_start_time)
+
+    def loss(params, static, input_1, input_2, label_1, label_2, TX_1, symmetry_params):
+        model = eqx.combine(params, static)
+        preds_1 = eqx.filter_vmap(model)(input_1)
+        preds_2 = eqx.filter_vmap(model)(input_2)
+        loss_pred = jnp.mean(jnp.square(preds_1 - label_1)) + jnp.mean(jnp.square(preds_2 - label_2))
+        for i, symmetry in enumerate(symmetries):
+            preds_1, TX_1 = jax.vmap(symmetry, in_axes=(0, 0, None))(preds_1, TX_1, symmetry_params[i])
+        loss_ag = jnp.mean(jnp.square(preds_1 - label_2))
+        losses = {REGRESSION_LOSS_KEY: loss_pred, EQUIVARIANCE_LOSS_KEY: loss_ag}
+        return loss_pred + loss_ag, losses         
+
+    @partial(jax.jit, static_argnums=(1))
+    def jitted_inner_step(params, static, opt_state, U, T, X, start_time, key):
+        key, subkey = jax.random.split(key)
+        symmetry_params = jax.random.uniform(subkey, shape=(len(symmetries), ), minval=-0.5, maxval=0.5)
+        TX = jnp.stack([T, X], axis=1)
+        U_ag, TX_ag = U, TX
+        for i, symmetry in enumerate(symmetries):
+            U_ag, TX_ag = jax.vmap(symmetry, in_axes=(0, 0, None))(U_ag, TX_ag, symmetry_params[i])
+        # TX_ag = jax.lax.dynamic_slice_in_dim(TX_ag, start_time, window_size, axis=2)
+        U_ag_history = jax.lax.dynamic_slice_in_dim(U_ag, start_time, window_size, axis=1)
+        U_ag_future = jax.lax.dynamic_slice_in_dim(U_ag, start_time + window_size, window_size, axis=1)
+        U_history = jax.lax.dynamic_slice_in_dim(U, start_time, window_size, axis=1)
+        U_future = jax.lax.dynamic_slice_in_dim(U, start_time + window_size, window_size, axis=1)
+        TX_future = jax.lax.dynamic_slice_in_dim(TX, start_time + window_size, window_size, axis=2)
+        loss_grad_f = eqx.filter_value_and_grad(loss, has_aux=True)
+        (loss_val, loss_dict), grads = loss_grad_f(params, static, U_history, U_ag_history, U_future, U_ag_future, 
+                                                   TX_future, symmetry_params)
+        updates, opt_state = optimizer.update(grads, opt_state, params)
+        params = optax.apply_updates(params, updates)
+        return params, opt_state, loss_dict
+
+    params, static = eqx.partition(model, eqx.is_array_like)
+    mean_regression = 0.0
+    mean_equivariance = 0.0
+    mean_train = 0.0
+
+    for epoch in range(num_epochs):
+        iter_train = iter(dataloader_train)
+        step = 0
+        for U, T, X, *_ in dataloader_train:
+            key, sub_key1, sub_key2 = jax.random.split(key, 3)
+            start_times_shuff = jax.random.shuffle(sub_key1, start_times)
+            for start in start_times_shuff:
+                params, opt_state, loss_dict = jitted_inner_step(params, static, opt_state, U, T, X, start, sub_key2)
+                step += 1
+                mean_regression += loss_dict[REGRESSION_LOSS_KEY]
+                mean_equivariance += loss_dict[EQUIVARIANCE_LOSS_KEY]
+                mean_train += mean_equivariance + mean_regression
+
+            if print_every is not None and step % print_every == 0:
+                print(f"Epoch {epoch}, step {step}, loss: {loss_dict}")    
+        history[TRAIN_LOSS_KEY].append(mean_train / step)
+        history[REGRESSION_LOSS_KEY].append(mean_regression / step)
+        history[EQUIVARIANCE_LOSS_KEY].append(mean_equivariance / step)
+        mean_train = 0.0
+        mean_regression = 0.0
+        mean_equivariance = 0.0
+        
+        if dataloader_val is not None:
+            val_loss = 0.0
+            for inputs, labels, *_ in dataloader_val:
+                val_loss += eqx.filter_jit(loss_mse)(model, inputs, labels)
+            val_loss /= len(dataloader_val)
+            print(f"Validation loss: {val_loss}")
+            history[VAL_LOSS_KEY].append(val_loss)  
+        for callback in callbacks:
+            callback(model, opt_state, epoch)
+    model = eqx.combine(params, static)
+    history = jax.tree.map(lambda x: jax.device_get(x), history)
     return model, opt_state, history
 
