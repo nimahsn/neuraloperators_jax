@@ -122,7 +122,7 @@ def fit_plain(model: eqx.Module,
             history[VAL_LOSS_KEY].append(val_loss)
         history[TRAIN_LOSS_KEY].append(loss)
         for callback in callbacks:
-            callback(model, opt_state, epoch)
+            model, opt_state, history, kwargs = callback(model, opt_state, history, kwargs, epoch)
 
     return model, opt_state, history
 
@@ -197,7 +197,6 @@ def fit_symmetric(model: eqx.Module,
         U_ag, TX_ag = U, TX
         for i, symmetry in enumerate(symmetries):
             U_ag, TX_ag = jax.vmap(symmetry, in_axes=(0, 0, None))(U_ag, TX_ag, symmetry_params[i])
-        # TX_ag = jax.lax.dynamic_slice_in_dim(TX_ag, start_time, window_size, axis=2)
         U_ag_history = jax.lax.dynamic_slice_in_dim(U_ag, start_time, window_size, axis=1)
         U_ag_future = jax.lax.dynamic_slice_in_dim(U_ag, start_time + window_size, window_size, axis=1)
         U_history = jax.lax.dynamic_slice_in_dim(U, start_time, window_size, axis=1)
@@ -245,7 +244,7 @@ def fit_symmetric(model: eqx.Module,
             print(f"Validation loss: {val_loss}")
             history[VAL_LOSS_KEY].append(val_loss)  
         for callback in callbacks:
-            callback(model, opt_state, epoch)
+            model, opt_state, history, kwargs = callback(model, opt_state, history, kwargs, epoch)
     model = eqx.combine(params, static)
     history = jax.tree.map(lambda x: jax.device_get(x), history)
     return model, opt_state, history
