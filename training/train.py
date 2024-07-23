@@ -163,7 +163,7 @@ def fit_symmetric(model: eqx.Module,
     - history: Dict[str, ArrayLike], a dictionary containing the training and validation loss history
     - print_every: int, the number of steps between reporting the training and validation loss. If None, no printing is performed.
     - key: PRNGKeyArray, the random key to be used for training
-    - kwargs: additional keyword arguments to be passed to the train_step_fn
+    - kwargs: additional keyword arguments to be passed to the training step function
 
     Returns:
     - model: eqx.Module, the trained model
@@ -177,11 +177,30 @@ def fit_symmetric(model: eqx.Module,
         if dataloader_val is not None:
             history[VAL_LOSS_KEY] = []
 
+    alpha = kwargs.get("alpha", 0.5)
+    gamma = kwargs.get("gamma", 1.0)
+    assert 0 <= alpha <= 1, "Alpha must be between 0 and 1"
     assert max_pushback_steps * window_size < total_steps - 2 * window_size, "Pushback steps too large"
-    max_start_time = total_steps - (2 * window_size + max_pushback_steps * window_size)
-    start_times = jnp.arange(max_start_time)
 
-    def loss(params, static, input_1, input_2, label_1, label_2, TX_1, symmetry_params, pushback_steps: int):
+    def loss(params, static, input_1, input_2, label_1, label_2, TX_1, symmetry_params, pushback_steps: int,\
+             alpha: float, gamma: float):
+        """
+        Loss function for symmetry enforcing training.
+
+        Args:
+        - params: eqx.Module, the model parameters
+        - static: eqx.Module, the static model parameters
+        - input_1: ArrayLike, the first input data batch
+        - input_2: ArrayLike, the second input data batch, augmented input data from the first batch
+        - label_1: ArrayLike, the first output data batch
+        - label_2: ArrayLike, the second output data batch
+        - TX_1: ArrayLike, the sampling grid for the first input data batch
+        - symmetry_params: ArrayLike, the augmentation parameters for the lie symmetries
+        - pushback_steps: int, the number of pushback steps
+        - alpha: float, balance paramter between the original and augmented data. \
+            If alpha=1, only the original data is used, if 0, only the augmented data is used. Should be between 0 and 1.
+        - gamma: float, the weight of the equivariance loss
+        """
         model = eqx.combine(params, static)
         preds_1 = eqx.filter_vmap(model)(input_1)
         preds_2 = eqx.filter_vmap(model)(input_2)
@@ -191,16 +210,17 @@ def fit_symmetric(model: eqx.Module,
         preds_1 = eqx.filter_vmap(model)(jax.lax.stop_gradient(input_1))
         preds_2 = eqx.filter_vmap(model)(jax.lax.stop_gradient(input_2))
 
-        loss_pred = (jnp.mean(jnp.square(preds_1 - label_1)) + jnp.mean(jnp.square(preds_2 - label_2))) / 2
+        loss_pred = (2 * alpha * jnp.mean(jnp.square(preds_1 - label_1)) + 2 * (1-alpha) * jnp.mean(jnp.square(preds_2 - label_2))) / 2
         for i, symmetry in enumerate(symmetries):
             preds_1, TX_1 = jax.vmap(symmetry, in_axes=(0, 0, 0))(preds_1, TX_1, symmetry_params[i])
         loss_ag = jnp.mean(jnp.square(preds_1 - label_2))
 
         losses = {REGRESSION_LOSS_KEY: loss_pred, EQUIVARIANCE_LOSS_KEY: loss_ag}
-        return loss_pred + loss_ag, losses         
+        return loss_pred + loss_ag * gamma, losses
 
-    @partial(jax.jit, static_argnames=("static", "pushback_steps"))
-    def jitted_inner_step(params, static, opt_state, U, T, X, start_time, pushback_steps: int=0, *, key):
+    @partial(jax.jit, static_argnames=("static", "pushback_steps", "alpha", "gamma"))
+    def jitted_inner_step(params, static, opt_state, U, T, X, start_time, pushback_steps: int,\
+                          alpha: float, gamma: float, *, key: PRNGKeyArray):
         symmetry_params = jax.random.uniform(key, shape=(len(symmetries), U.shape[0]), minval=-0.5, maxval=0.5)
         TX = jnp.stack([T, X], axis=1)
         U_ag, TX_ag = U, TX
@@ -216,7 +236,7 @@ def fit_symmetric(model: eqx.Module,
                                                  window_size, axis=2)
         loss_grad_f = eqx.filter_value_and_grad(loss, has_aux=True)
         (loss_val, loss_dict), grads = loss_grad_f(params, static, U_history, U_ag_history, U_future, U_ag_future, 
-                                                   TX_future, symmetry_params, pushback_steps)
+                                                   TX_future, symmetry_params, pushback_steps, alpha, gamma)
         updates, opt_state = optimizer.update(grads, opt_state, params)
         params = optax.apply_updates(params, updates)
         return params, opt_state, loss_dict
@@ -234,11 +254,14 @@ def fit_symmetric(model: eqx.Module,
             max_pushback = max_pushback_steps
         for U, T, X, *_ in dataloader_train:
             key, sub_key_1, sub_key_2 = jax.random.split(key, 3)
+            max_start_time = total_steps - (2 * window_size + max_pushback * window_size)
+            start_times = jnp.arange(max_start_time)
             start_times_shuff = jax.random.permutation(sub_key_1, start_times, independent=True)
             pushback_steps = jax.random.choice(sub_key_2, jnp.arange(max_pushback + 1), shape=(len(start_times_shuff),))
             for start, push in zip(start_times_shuff, pushback_steps):
                 key, sub_key = jax.random.split(key)
-                params, opt_state, loss_dict = jitted_inner_step(params, static, opt_state, U, T, X, start, push.item(), key=sub_key)
+                params, opt_state, loss_dict = jitted_inner_step(params, static, opt_state, U, T, X, start, push.item(),
+                                                                 alpha, gamma, key=sub_key)
                 step += 1
                 mean_regression += loss_dict[REGRESSION_LOSS_KEY]
                 mean_equivariance += loss_dict[EQUIVARIANCE_LOSS_KEY]
