@@ -15,6 +15,8 @@ import numpy as np
 import jax
 from jax.tree_util import tree_map
 from jaxtyping import ArrayLike, PRNGKeyArray
+from functools import partial
+from typing import List
 
 #function to torch dataloader from the dataset
 def create_dataloader(data_string: str, mode: str, nt: int, nx: int, batch_size:int, num_workers:int):
@@ -127,12 +129,7 @@ class AugmentedTimeWindowDataset(TimeWindowDataset):
         start_time = idx % self.max_start_time
         x = self.data['x'][traj_idx]
         t = self.data['t'][traj_idx]
-        X, T = np.meshgrid(x, t)
-        TX = np.stack([T, X])
-        U = self.data[self.dataset][traj_idx]
-        *keys, self.key = jax.random.split(self.key, self.num_transforms + 1)
-        for transform, key in zip(self.list_transforms, keys):
-            U, TX = transform((U, TX), key=key)                   
+        U, TX, self.key = self.jitted_augmenter(self.data[self.dataset][traj_idx], t, x, self.list_transforms, self.key)
         history = U[start_time:start_time + self.history_steps]
         future = U[start_time + self.history_steps:start_time + self.history_steps + self.future_steps]
         dx = x[1] - x[0]
@@ -236,6 +233,24 @@ class NumpyLoader(DataLoader):
         batch_sampler=batch_sampler,
         num_workers=num_workers,
         collate_fn=numpy_collate,
+        pin_memory=pin_memory,
+        drop_last=drop_last,
+        timeout=timeout,
+        worker_init_fn=worker_init_fn)
+
+class JaxLoader(DataLoader):
+  def __init__(self, dataset, batch_size=1,
+                shuffle=False, sampler=None,
+                batch_sampler=None, num_workers=0,
+                pin_memory=False, drop_last=False,
+                timeout=0, worker_init_fn=None):
+    super(self.__class__, self).__init__(dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        sampler=sampler,
+        batch_sampler=batch_sampler,
+        num_workers=num_workers,
+        collate_fn=jax_collate,
         pin_memory=pin_memory,
         drop_last=drop_last,
         timeout=timeout,
