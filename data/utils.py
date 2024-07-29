@@ -7,7 +7,7 @@ import numpy as np
 import jax.numpy as jnp
 import h5py
 import torch
-from typing import Tuple
+from typing import Callable, Tuple
 from torch.utils import data
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
@@ -186,6 +186,55 @@ class TrajectoryDataset(Dataset):
         x = self.data['x'][idx]
         t = self.data['t'][idx]
         X, T = np.meshgrid(x, t)
+        return u, T, X
+    
+class AugmentedTrajectoryDataset(TrajectoryDataset):
+    """
+    Load samples of an PDE Dataset, get items according to PDE. The samples are augmented with the given transformations.
+
+    Args:
+        path: str, path to the HDF5 file.
+        mode: str, the mode to load the dataset in. Can be 'train', 'val', or 'test'.
+        nt: int, the number of time points in the trajectory.
+        nx: int, the number of spatial points in the trajectory.
+        list_transforms: list[Callable], a list of transformations to apply to the samples. Each transformation accepts a sample and a parameter and returns a transformed sample.
+        num_transforms: int, the number of augmented samples to generate for each sample.
+        key: PRNGKeyArray, the random key to use for the transformations.
+        dtype: np.dtype, the data type of the samples.    
+    """
+
+    def __init__(self, path: str,
+                 mode: str,
+                 nt: int,
+                 nx: int,
+                 list_transforms: List[Callable],
+                 num_transforms: int,
+                 key: PRNGKeyArray,
+                 dtype=np.float64,
+                 load_all: bool=True):
+        super().__init__(path, mode, nt, nx, dtype, load_all)
+        self.list_transforms = list_transforms
+        self.num_transforms = num_transforms
+        self.key = key
+
+    def __len__(self):
+        return super().__len__() * self.num_transforms
+    
+    @partial(jax.jit, static_argnames=('self', 'transforms'))
+    def jitted_augmenter(self, U: ArrayLike, T: ArrayLike, X: ArrayLike, transforms: List[callable], key: PRNGKeyArray):
+        # X, T = jnp.meshgrid(x, t)
+        TX = jnp.stack([T, X])
+        *keys , key = jax.random.split(key, len(transforms) + 1)
+        for transform, subkey in zip(transforms, keys):
+            U, TX = transform(U, TX, key=subkey)
+        T = TX[0]
+        X = TX[1]
+        return U, T, X, key
+    
+    def __getitem__(self, idx: int) -> Tuple[np.ndarray]:
+        idx = idx // self.num_transforms
+        u, T, X = super().__getitem__(idx)
+        u, T, X, self.key = self.jitted_augmenter(u, T, X, self.list_transforms, self.key)
         return u, T, X
 
 #function to create x - y data pairs: 20 past timepoints as x, 20 future timepoints as y
