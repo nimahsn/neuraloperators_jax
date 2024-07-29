@@ -15,8 +15,8 @@ import jax.numpy as jnp
 import optax
 from typing import Callable, Dict, Tuple, Any
 from jaxtyping import ArrayLike, PRNGKeyArray
-from utils.serial import save_model
-from training.metrics import test_unrolling
+from ..utils.serial import save_model
+from .metrics import test_unrolling
 from pathlib import Path
 
 class Callback:

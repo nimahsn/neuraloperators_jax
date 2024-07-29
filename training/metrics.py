@@ -3,7 +3,6 @@ import jax.numpy as jnp
 import equinox as eqx
 from jaxtyping import ArrayLike
 from typing import Callable, Union
-from modules.auxiliary import autoregressive_predict
 from torch.utils.data import DataLoader
 
 def test_unrolling(model: eqx.Module, 

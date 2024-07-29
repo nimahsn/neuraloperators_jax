@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import optax
 import equinox as eqx
-from training.losses import loss_mse
+from .losses import loss_mse
 from torch.utils.data import DataLoader
 from typing import Callable, Tuple, List, Sequence, Dict
 from jaxtyping import ArrayLike, PRNGKeyArray
