@@ -202,8 +202,6 @@ def fit_symmetric(model: eqx.Module,
         - gamma: float, the weight of the equivariance loss
         """
         model = eqx.combine(params, static)
-        preds_1 = eqx.filter_vmap(model)(input_1)
-        preds_2 = eqx.filter_vmap(model)(input_2)
         for i in range(pushback_steps):
             input_1 = eqx.filter_vmap(model)(input_1)
             input_2 = eqx.filter_vmap(model)(input_2)
