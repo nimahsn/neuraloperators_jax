@@ -183,7 +183,7 @@ def fit_symmetric(model: eqx.Module,
     assert max_pushback_steps * window_size < total_steps - 2 * window_size, "Pushback steps too large"
 
     def loss(params, static, input_1, input_2, label_1, label_2, TX_1, symmetry_params, pushback_steps: int,\
-             alpha: float, gamma: float):
+             alpha: float, gamma: float, propagate_pushback=False, propagate_symmetry=False, u1_l2=True, u1_u2=False):
         """
         Loss function for symmetry enforcing training.
 
@@ -200,18 +200,41 @@ def fit_symmetric(model: eqx.Module,
         - alpha: float, balance paramter between the original and augmented data. \
             If alpha=1, only the original data is used, if 0, only the augmented data is used. Should be between 0 and 1.
         - gamma: float, the weight of the equivariance loss
+        - propagate_pushback: bool, whether to propagate gradients through the pushback steps
+        - propagate_symmetry: bool, whether to propagate gradients through the symmetry augmentation
+        - u1_l2: bool, whether to apply symmetry between first batch and second label
+        - u1_u2: bool, whether to apply symmetry between first batch and second batch
         """
         model = eqx.combine(params, static)
         for i in range(pushback_steps):
             input_1 = eqx.filter_vmap(model)(input_1)
             input_2 = eqx.filter_vmap(model)(input_2)
-        preds_1 = eqx.filter_vmap(model)(jax.lax.stop_gradient(input_1))
-        preds_2 = eqx.filter_vmap(model)(jax.lax.stop_gradient(input_2))
 
-        loss_pred = (2 * alpha * jnp.mean(jnp.square(preds_1 - label_1)) + 2 * (1-alpha) * jnp.mean(jnp.square(preds_2 - label_2))) / 2
+        preds_1_stop = eqx.filter_vmap(model)(jax.lax.stop_gradient(input_1))
+        preds_2_stop = eqx.filter_vmap(model)(jax.lax.stop_gradient(input_2))
+        if propagate_pushback or propagate_symmetry:
+            preds_1_propagate = eqx.filter_vmap(model)(input_1)
+            preds_2_propagate = eqx.filter_vmap(model)(input_2)
+
+        if propagate_pushback:
+            preds_1 = preds_1_propagate
+            preds_2 = preds_2_propagate
+        else:
+            preds_1 = preds_1_stop
+            preds_2 = preds_2_stop
+        loss_pred = (2 * alpha * jnp.mean(jnp.square(preds_1 - label_1)) +\
+                     2 * (1-alpha) * jnp.mean(jnp.square(preds_2 - label_2))) / 2
+
+        if propagate_symmetry:
+            preds_1 = preds_1_propagate
+            preds_2 = preds_2_propagate
+        else:
+            preds_1 = preds_1_stop
+            preds_2 = preds_2_stop
         for i, symmetry in enumerate(symmetries):
             preds_1, TX_1 = jax.vmap(symmetry, in_axes=(0, 0, 0))(preds_1, TX_1, symmetry_params[i])
-        loss_ag = jnp.mean(jnp.square(preds_1 - label_2))
+        loss_ag = (jnp.mean(jnp.square(preds_1 - label_2)) if u1_l2 else 0.0) + \
+            (jnp.mean(jnp.square(preds_1 - preds_2)) if u1_u2 else 0.0)
 
         losses = {REGRESSION_LOSS_KEY: loss_pred, EQUIVARIANCE_LOSS_KEY: loss_ag}
         return loss_pred + loss_ag * gamma, losses
